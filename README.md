@@ -32,7 +32,8 @@
 | 手动 dispatch | 修订重发:同版本构建号 +1,旧 Release 自动清理 |
 | 每日 09:00(北京时间) | 查上游最新 release,出新版自动 bump 版本 → 提交 → 打包发版 |
 
-- build job 按架构并行:`docker pull --platform <arch>` → `docker save` 进 images/ → 渲染测试 → `ugcli check` + `pack`
+- build job 单 job 顺序打双架构:`docker pull --platform <arch>` ×2 → `docker save` 进 images/ → 渲染测试 → `ugcli check` → `pack` ×2
+  (不拆 matrix 的原因:`ugcli check` 会同时校验 `rootfs_amd64` 和 `rootfs_arm64` 里的镜像 tar,只备单架构会直接 fail)
 - 构建号 = 已有 `upk-*` tag 最大序号 + 1,只升不降(ugcli 同版本构建号必须递增)
 - `tools/ugcli/` 内置 Linux 版 ugcli,不依赖绿联 CDN(海外 runner 常连不上)
 - CI 诡异行为先查 <https://www.githubstatus.com> 的 Actions 状态,别先怀疑自己的配置

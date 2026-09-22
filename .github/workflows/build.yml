@@ -110,30 +110,38 @@ jobs:
     needs: detect
     if: needs.detect.outputs.should_build == 'true'
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [amd64, arm64]
+    # 刻意不用 matrix 拆架构:ugcli check 会同时校验 rootfs_amd64 与 rootfs_arm64
+    # 两个目录里的镜像 tar(实测:只备单架构时报 "rootfs_<另一架构> not exists",
+    # 补空目录则报 "missing image tar for service")。所以双架构镜像必须在同一个
+    # job 里备齐,check 通过后当场依次打包两架构。
     steps:
       - uses: actions/checkout@v7
 
       - name: 渲染测试(compose 模板,安装期事故的唯一有效防线)
         run: go run scripts/test-compose-template.go
 
-      - name: 拉取上游镜像并导出 tar(上游只发 latest,脚本按 digest 钉住)
+      - name: 拉取双架构上游镜像并导出 tar(上游只发 latest,脚本按 digest 钉住)
         run: |
           set -euo pipefail
           VERSION=$(awk '/^version:/{print $2; exit}' "$PROJECT_DIR/project.yaml")
-          scripts/fetch-image.sh "${{ matrix.arch }}" "${VERSION}"
+          scripts/fetch-image.sh amd64 "${VERSION}"
+          scripts/fetch-image.sh arm64 "${VERSION}"
 
-      - name: 打包 ${{ matrix.arch }}
-        run: scripts/build.sh "${{ needs.detect.outputs.build_num }}" "${{ matrix.arch }}"
+      - name: 打包双架构
+        run: scripts/build.sh "${{ needs.detect.outputs.build_num }}"
 
-      - name: 上传产物
+      - name: 上传 amd64 产物
         uses: actions/upload-artifact@v7
         with:
-          name: upk-${{ matrix.arch }}
-          path: ./*.upk
+          name: upk-amd64
+          path: ./amd64_*_com.rachelos.wemprss_*.upk
+          if-no-files-found: error
+
+      - name: 上传 arm64 产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: upk-arm64
+          path: ./arm64_*_com.rachelos.wemprss_*.upk
           if-no-files-found: error
 
   release:
