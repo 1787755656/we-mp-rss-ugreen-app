@@ -1,0 +1,44 @@
+# ============================================================
+# WeRSS 微信公众号订阅助手 —— UGOS Pro Docker 应用编排
+#
+# 这个文件会被 ugcli pack 改名为 docker-compose.tmpl,安装时按 Go 模板
+# 渲染成真正的 docker-compose.yaml。三条硬约束(真机踩过的坑,别改回去):
+#   1. parameters 声明的参数值一律是列表(选填必填、multi 与否都一样),
+#      必须用 index 取第 0 项;选填参数外面必须套一层条件判断,否则用户
+#      留空时安装阶段直接渲染失败(报 slice index out of range)。
+#   2. 循环/条件只能写在井号注释后面,独立成行的模板控制行不是合法 YAML。
+#   3. 本文件的注释里不能出现双花括号字面量——模板引擎不认识 YAML 注释,
+#      会把注释里的占位符当成真的 action 执行,渲染直接失败。
+#
+# 与上游官方 docker run 的差异只有一点:
+#   - 宿主端口固定 28001(上游默认 8001,避免和用户已有的 we-mp-rss 容器撞车)
+#
+# 镜像是打包进 upk 的:ugcli 要求每个 service 的镜像都在 rootfs_<arch>/images/
+# 里有对应 tar(命名 <镜像名>-<tag>.tar,内容为 docker save 产物,check 会真的
+# 解析 manifest.json)。所以安装时【不联网拉镜像】,ghcr.io 通不通都无所谓。
+#
+# 会话密钥不用管:上游 core/auth.py 在 SECRET_KEY 未设置且配置为已知弱默认时,
+# 会自动生成强随机密钥并持久化到数据目录 data/.secret_key(即挂载卷内),
+# 重启/重建容器都稳定。
+#
+# 另外注意:本文件里不能出现美元符——ugcli 会扫描未在 parameters 里
+# 声明的 VAR 当成“变量未设置”直接报错,连 shell 转义的双美元符也逃不掉。
+# ============================================================
+
+name: wemprss-ugreen
+
+services:
+  wemprss:
+    image: "ghcr.io/rachelos/we-mp-rss:1.5.3"
+    ports:
+      # 必须 0.0.0.0:open_type 只能是 tab,tab 是浏览器直连这个端口,
+      # 绑 loopback 页面根本打不开。应用自带登录认证(首次启动建 admin)。
+      - "28001:8001"
+    environment:
+      # TZ 是 Docker 套件注入的内置变量,标量,可以直接写
+      TZ: "{{.TZ}}"
+    volumes:
+      # 相对路径基于应用安装目录(平台管理,升级/迁移跟着应用走),
+      # 挂成容器里的 /app/data:数据库、缓存、授权二维码、会话密钥都在这
+      - ./data:/app/data:rw
+    restart: unless-stopped

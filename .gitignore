@@ -1,0 +1,12 @@
+# 打包产物与中间态
+build_dir/
+*.upk
+
+# Docker 型应用的两架构目录:只有离线镜像 tar 才需要内容,
+# 本包直接引用上游镜像,目录由 scripts/build.sh 打包前现建
+rootfs_amd64/
+rootfs_arm64/
+
+.DS_Store
+scripts/icon-1024.png
+scripts/icon.html

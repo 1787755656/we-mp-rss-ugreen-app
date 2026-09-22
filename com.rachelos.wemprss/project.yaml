@@ -1,0 +1,83 @@
+# ============================================================
+# WeRSS(we-mp-rss)—— 微信公众号 RSS 订阅助手 · UGOS Pro Docker 应用
+#
+# 上游是 Python + FastAPI 后端(Playwright 浏览器采集 + 内置 Redis 缓存),
+# 官方唯一发行形态就是 Docker 镜像(ghcr.io/rachelos/we-mp-rss,双架构)。
+# 这类「解释型 + 浏览器自动化」应用,绿联的标准形态就是 Docker 型应用:
+# 安装时渲染 compose 模板 → 拉上游镜像 → 起容器,功能与上游完全一致。
+#
+# 上游作者 rachelos(MIT License),本包由 xw 打包维护。
+#
+# 无安装参数:Docker 型应用的镜像 tar 必须打包进 upk(rootfs_<arch>/images/),
+# 安装时离线加载,不依赖 ghcr.io 网络,也就不需要镜像加速参数。
+# ============================================================
+
+spec_version: "2.1"
+app_id: com.rachelos.wemprss
+version: 1.5.3
+
+support_arch:
+  - amd64
+  - arm64
+
+supports:
+  - pc
+  - app
+
+is_docker_app: true
+
+# 依赖 Docker 套件(Docker 应用必填)
+depend_docker_version: 1.7.0.0000
+
+# 最低固件版本
+depend_fw_version: 1.13.0.0000
+
+# 服务端口 = compose 里映射的宿主侧端口(平台靠它探活)。
+# 不照抄上游默认 8001:用户可能已经在跑 we-mp-rss 的 Docker 版。
+port: 28001
+
+# Docker 应用只能 tab:浏览器新标签页直连容器端口,应用自带登录页
+open_type: tab
+
+tag_types:
+  - media
+  - utility
+
+support_migration: true
+
+i18n:
+  zh-CN:
+    name: WeRSS 公众号订阅助手
+    description: >-
+      微信公众号 RSS 订阅助手(上游项目 we-mp-rss)。订阅公众号后定时抓取
+      文章并生成标准 RSS 订阅源,支持全文输出、多种采集方式、导出 Markdown
+      与 PDF、Webhook 通知、多主题网页管理端。
+      首次启动自动创建管理员,账号 admin,初始密码 admin@123,
+      登录后请立即修改。
+    author: rachelos
+    official: https://github.com/rachelos/we-mp-rss
+    help: https://github.com/rachelos/we-mp-rss/issues
+    publisher: xw
+    publisher_link: https://github.com/1787755656
+  en-US:
+    name: WeRSS Official Account RSS
+    description: >-
+      WeChat Official Account RSS assistant (upstream we-mp-rss). Subscribe
+      to official accounts, scrape articles on a schedule and generate
+      standard RSS feeds, with full-text output, multiple scraping methods,
+      export to Markdown and PDF, webhook notifications and a themed web UI.
+      An admin account is created on first start — username admin,
+      initial password admin@123. Change it right after login.
+    author: rachelos
+    official: https://github.com/rachelos/we-mp-rss
+    help: https://github.com/rachelos/we-mp-rss/issues
+    publisher: xw
+    publisher_link: https://github.com/1787755656
+
+# 开源合规(上游 MIT)
+license_agreement_link:
+  - https://github.com/rachelos/we-mp-rss/blob/main/LICENSE
+source_code_link:
+  - https://github.com/rachelos/we-mp-rss
+technical_support_link:
+  - https://github.com/rachelos/we-mp-rss/issues

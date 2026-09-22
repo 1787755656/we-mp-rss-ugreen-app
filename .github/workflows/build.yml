@@ -1,0 +1,182 @@
+# WeRSS UGOS 应用自动构建
+#
+# 三条触发路径:
+#   1. push(改了应用目录/脚本/工具链)——版本已有 upk-* tag 则跳过
+#   2. 手动 dispatch——修订重发(同版本构建号+1,旧 Release 自动清理)
+#   3. 每日定时巡检——上游出新版则自动 bump project.yaml + compose 镜像 tag,
+#      提交推送并当场打包发版(不依赖 push 事件回环,GITHUB_TOKEN 推送不触发
+#      workflow,所以 bump 和构建必须在同一次运行里完成)
+#
+# 实战纪律(来自 ugreen-apps monorepo):
+#   - ugcli 二进制 vendor 进仓库,不依赖绿联 CDN(海外 runner 经常 300s 超时)
+#   - 构建号 = 已有 upk-* tag 的最大序号 + 1,只升不降
+#   - CI 挂了先查 githubstatus.com 的 Actions 状态,别先怀疑自己的配置
+name: build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "com.rachelos.wemprss/**"
+      - "scripts/**"
+      - "tools/**"
+      - ".github/workflows/build.yml"
+  workflow_dispatch: {}
+  schedule:
+    - cron: "0 1 * * *" # UTC 01:00 = 北京时间 09:00
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  APP_ID: com.rachelos.wemprss
+  PROJECT_DIR: com.rachelos.wemprss
+  UPSTREAM_REPO: rachelos/we-mp-rss
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      build_num: ${{ steps.buildnum.outputs.build_num }}
+      should_build: ${{ steps.should_build.outputs.should_build }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 每日巡检——上游出新版则 bump 并提交
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          TAG=$(curl -fsSL "https://api.github.com/repos/${UPSTREAM_REPO}/releases/latest" | jq -r '.tag_name')
+          V="${TAG#v}"
+          CURRENT=$(awk '/^version:/{print $2; exit}' "$PROJECT_DIR/project.yaml")
+          echo "上游=${TAG:-无} 当前=${CURRENT}"
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            echo "拿不到上游版本,本次跳过 bump"; exit 0
+          fi
+          NEWEST=$(printf '%s\n%s\n' "$V" "$CURRENT" | sort -V | tail -1)
+          if [ "$NEWEST" = "$CURRENT" ]; then
+            echo "上游无更新"; exit 0
+          fi
+          sed -i "s/^version: .*/version: ${V}/" "$PROJECT_DIR/project.yaml"
+          sed -i "s#rachelos/we-mp-rss:[0-9.]*#rachelos/we-mp-rss:${V}#" \
+            "$PROJECT_DIR/rootfs_common/docker-compose.yaml"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$PROJECT_DIR/project.yaml" "$PROJECT_DIR/rootfs_common/docker-compose.yaml"
+          git commit -m "chore: 跟随上游 ${TAG}"
+          git push
+
+      - name: 解析版本号
+        id: version
+        run: |
+          set -euo pipefail
+          V=$(awk '/^version:/{print $2; exit}' "$PROJECT_DIR/project.yaml")
+          MI=$(echo "$V" | cut -d. -f2)
+          if [ "${#MI}" -gt 2 ]; then
+            echo "!! minor 段 ${MI} 超过两位,ugcli 会拒绝(中段最多两位)" >&2
+            exit 1
+          fi
+          echo "version=${V}" >> "$GITHUB_OUTPUT"
+
+      - name: 计算构建号(已有 tag 最大序号 + 1,只升不降)
+        id: buildnum
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          MAX=$(git tag --list 'upk-*' | awk -F. '{print $NF}' | grep -E '^[0-9]+$' | sort -n | tail -1 || echo 0)
+          [ -z "$MAX" ] && MAX=0
+          echo "已有最大构建号: ${MAX}"
+          echo "build_num=$((MAX+1))" >> "$GITHUB_OUTPUT"
+
+      - name: 判定是否需要构建
+        id: should_build
+        run: |
+          set -euo pipefail
+          V="${{ steps.version.outputs.version }}"
+          if [ "${{ github.event_name }}" = "push" ] \
+            && git tag --list "upk-${V}.*" | grep -q .; then
+            echo "版本 ${V} 已发布过,push 不重打(修订重发请手动 dispatch)"
+            echo "should_build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: detect
+    if: needs.detect.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 渲染测试(compose 模板,安装期事故的唯一有效防线)
+        run: go run scripts/test-compose-template.go
+
+      - name: 拉取上游镜像并导出 tar(上游只发 latest,脚本按 digest 钉住)
+        run: |
+          set -euo pipefail
+          VERSION=$(awk '/^version:/{print $2; exit}' "$PROJECT_DIR/project.yaml")
+          scripts/fetch-image.sh "${{ matrix.arch }}" "${VERSION}"
+
+      - name: 打包 ${{ matrix.arch }}
+        run: scripts/build.sh "${{ needs.detect.outputs.build_num }}" "${{ matrix.arch }}"
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v7
+        with:
+          name: upk-${{ matrix.arch }}
+          path: ./*.upk
+          if-no-files-found: error
+
+  release:
+    needs: [detect, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: 下载全部产物
+        uses: actions/download-artifact@v8
+        with:
+          pattern: upk-*
+          path: dist
+          merge-multiple: true
+
+      - name: 清理同版本旧 Release(修订重发场景)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          for TAG in $(git tag --list "upk-${VERSION}.*"); do
+            echo "清理旧 Release: ${TAG}"
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag || true
+          done
+
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.detect.outputs.version }}
+          BUILD: ${{ needs.detect.outputs.build_num }}
+        run: |
+          set -euo pipefail
+          TAG="upk-${VERSION}.${BUILD}"
+          ls -la dist/
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --title "WeRSS ${VERSION} (构建 ${BUILD})" \
+            --notes "跟随上游 [rachelos/we-mp-rss v${VERSION}](https://github.com/rachelos/we-mp-rss/releases/tag/v${VERSION})。
+
+          - 安装:应用中心「手动安装」对应架构的 upk(amd64 / arm64)
+          - 镜像已离线打进包(每架构约 1.7GB,安装时不联网拉镜像)
+          - 默认管理员账号 admin,初始密码 admin@123,登录后请立即修改
+          - 端口 28001
+          - 上游更新日志见 ${GITHUB_SERVER_URL}/${UPSTREAM_REPO}/releases" \
+            dist/*.upk
